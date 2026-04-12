@@ -4,6 +4,8 @@ Preventing overselling in high-concurrency flash sale scenarios using Elixir/OTP
 
 500 users click "Buy" at the same instant. Only 10 items in stock. Zero overselling. No manual locks.
 
+**Live demo:** https://inventory-reservation.fly.dev/
+
 ## Why Elixir?
 
 This challenge is about **concurrency** — hundreds of simultaneous requests fighting over shared mutable state (inventory count). In most languages, you'd need to build a concurrency layer yourself:
