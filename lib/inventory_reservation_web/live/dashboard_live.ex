@@ -66,16 +66,29 @@ defmodule InventoryReservationWeb.DashboardLive do
 
     socket = add_log(socket, :info, "Spawning #{length(users)} concurrent BEAM processes...")
 
-    t_start = System.monotonic_time(:microsecond)
+    # Barrier pattern: spawn all processes first, block them on a shared ref,
+    # then broadcast "go" so they all hit the GenServer at the exact same instant.
+    barrier = make_ref()
+    parent = self()
 
     shuffled = Enum.shuffle(users)
 
     tasks =
       Enum.map(shuffled, fn u ->
         Task.async(fn ->
+          # Signal ready, then block until the barrier fires
+          send(parent, {:ready, barrier})
+          receive do: ({:go, ^barrier} -> :ok)
           {u.index, InventoryReservation.reserve(product_id, u.user)}
         end)
       end)
+
+    # Wait for all tasks to signal ready
+    for _ <- tasks, do: receive(do: ({:ready, ^barrier} -> :ok))
+
+    # All processes are spawned and waiting — fire!
+    t_start = System.monotonic_time(:microsecond)
+    for task <- tasks, do: send(task.pid, {:go, barrier})
 
     raw_results = Task.await_many(tasks, 30_000)
     t_end = System.monotonic_time(:microsecond)
@@ -207,16 +220,24 @@ defmodule InventoryReservationWeb.DashboardLive do
       else
         socket = add_log(socket, :info, "Re-firing #{length(retryable)} users for #{status.available_stock} remaining stock...")
 
-        t_start = System.monotonic_time(:microsecond)
+        barrier = make_ref()
+        parent = self()
 
         shuffled = Enum.shuffle(retryable)
 
         tasks =
           Enum.map(shuffled, fn u ->
             Task.async(fn ->
+              send(parent, {:ready, barrier})
+              receive do: ({:go, ^barrier} -> :ok)
               {u.index, InventoryReservation.reserve(product_id, u.user)}
             end)
           end)
+
+        for _ <- tasks, do: receive(do: ({:ready, ^barrier} -> :ok))
+
+        t_start = System.monotonic_time(:microsecond)
+        for task <- tasks, do: send(task.pid, {:go, barrier})
 
         raw_results = Task.await_many(tasks, 30_000)
         t_end = System.monotonic_time(:microsecond)

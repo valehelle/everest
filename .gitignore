@@ -35,3 +35,8 @@ inventory_reservation-*.tar
 npm-debug.log
 /assets/node_modules/
 
+# SQLite database files
+*.db
+*.db-shm
+*.db-wal
+

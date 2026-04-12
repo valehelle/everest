@@ -161,16 +161,40 @@ graph LR
 | Expiry releases stock | Simulated via direct `send(pid, {:expire, id})` |
 | Reserve after expiry | Freed slot is available |
 
-### Concurrency Tests — Parallel Requests
+### Concurrency Tests — Barrier Pattern
+
+A naive loop spawning requests sequentially doesn't truly test simultaneous access — each request arrives at a slightly different time. Instead, we use a **barrier pattern** to guarantee all processes fire at the exact same instant:
+
+```elixir
+barrier = make_ref()
+parent = self()
+
+# 1. Spawn all processes — each blocks waiting for the signal
+tasks = Enum.map(users, fn u ->
+  Task.async(fn ->
+    send(parent, {:ready, barrier})          # Signal "I'm ready"
+    receive do: ({:go, ^barrier} -> :ok)     # Block until barrier fires
+    InventoryReservation.reserve(product_id, u.user)
+  end)
+end)
+
+# 2. Wait until every process is spawned and parked
+for _ <- tasks, do: receive(do: ({:ready, ^barrier} -> :ok))
+
+# 3. All 500 processes are waiting — broadcast "go" simultaneously
+for task <- tasks, do: send(task.pid, {:go, barrier})
+```
+
+This creates a true thundering herd: all 500 BEAM processes hit the GenServer mailbox at the same instant, which is exactly what happens in a real flash sale when a countdown hits zero.
 
 | Test | Setup | Expected Result |
 |------|-------|-----------------|
-| 500 users, 1 item | `start_product(id, 1)` then 500 `Task.async` | Exactly 1 success, 499 failures |
-| 500 users, 10 items | `start_product(id, 10)` then 500 `Task.async` | Exactly 10 successes, 490 failures |
+| 500 users, 1 item | `start_product(id, 1)` then 500 `Task.async` with barrier | Exactly 1 success, 499 failures |
+| 500 users, 10 items | `start_product(id, 10)` then 500 `Task.async` with barrier | Exactly 10 successes, 490 failures |
 | 100 concurrent `start_product` | Same product ID | All return same PID (no duplicates) |
 
 ```bash
-mix test              # Run all 17 tests
+mix test              # Run all 21 tests
 mix test --trace      # Verbose output
 ```
 
@@ -217,5 +241,5 @@ lib/
     ├── router.ex                         # Routes
     └── ...                               # Phoenix boilerplate
 test/
-└── inventory_reservation_test.exs        # 17 tests across 3 levels
+└── inventory_reservation_test.exs        # 21 tests across 3 levels
 ```
